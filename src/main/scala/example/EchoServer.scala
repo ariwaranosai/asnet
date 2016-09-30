@@ -30,6 +30,8 @@ object EchoServer {
     val connections: Source[IncomingConnection, Future[ServerBinding]] =
       Tcp().bind(address, port)
 
+    val commandParser = Flow[String].takeWhile(_ != "BYE").map(_ + "!")
+
 
     val echo = Flow[ByteString]
       .via(Framing.delimiter(
@@ -37,13 +39,16 @@ object EchoServer {
         maximumFrameLength = 256,
         allowTruncation = true))
       .map(_.utf8String)
-      .map(_ + "!!!\n")
-      .map(ByteString(_))
+      .via(commandParser)
 
     val handler = Sink.foreach[IncomingConnection] {
       conn =>
         println(s"New connection from ${conn.remoteAddress}")
-        conn handleWith echo
+        import conn._
+
+        val welcomeMsg = s"Welcome to: $localAddress, you are: $remoteAddress"
+        val welcome = Source.single(welcomeMsg)
+        conn handleWith echo.merge(welcome).map(_ + "\n").map(ByteString(_))
     }
 
     val binding = connections.to(handler).run()
@@ -64,7 +69,6 @@ object EchoClient {
 
   def main(args: Array[String]): Unit = {
     implicit val system = ActorSystem("EchoClient")
-    import system.dispatcher
     implicit val materializer = ActorMaterializer()
 
     val connection = Tcp().outgoingConnection("127.0.0.1", 6000)
@@ -79,8 +83,8 @@ object EchoClient {
         ByteString("\n"),
         maximumFrameLength = 256,
         allowTruncation = true))
-      .map(_.utf8String)
-      .map(text => println("Server: " + text))
+      .map(x => x.decodeString("utf-8"))
+      .map(text => println(s"SServer: $text"))
       .map(_ => readLine("> "))
       .via(replParser)
 
