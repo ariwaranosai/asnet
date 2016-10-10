@@ -94,25 +94,34 @@ object ByteFragment {
   implicit def bytesToByteString(b: Seq[Byte]): ByteString = ByteString(b.toArray)
 }
 
-final class ProxyServerStage extends GraphStage[FlowShape[ByteString, ByteString]] {
-  val in = Inlet[ByteString]("ProxyServer.in")
-  val out = Outlet[ByteString]("ProxyServer.out")
 
-  val maxBufferSize = 4096
-  var buffer = ByteString.empty
+final class ProxyServerStage extends GraphStage[FlowShape[ByteString, ByteString]] {
+  val tcpIn = Inlet[ByteString]("ProxyServer.tcpIn")
+  val tcpOut = Outlet[ByteString]("ProxyServer.tcpOut")
+
+  override def shape: FlowShape[ByteString, ByteString] = FlowShape(tcpIn, tcpOut)
 
   @scala.throws[Exception](classOf[Exception])
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
-    setHandler(in, new InHandler {
-      @scala.throws[Exception](classOf[Exception])
-      override def onPush(): Unit = ???
+    val bufferSize = 8192
+    var buffer = ByteString.empty
 
-    })
-    setHandler(out, new OutHandler {
+    def writeBuffer(data: ByteString): Unit = {
+      if (buffer.length > bufferSize)
+        failStage(BufferOverflowException("Buffer overflow"))
+      else
+        buffer ++= data
+    }
+
+    def processBuffer(): Unit = ???
+
+    setHandler(tcpIn, new InHandler {
       @scala.throws[Exception](classOf[Exception])
-      override def onPull(): Unit = ???
+      override def onPush(): Unit = {
+        val data = grab(tcpIn)
+        writeBuffer(data)
+        processBuffer()
+      }
     })
   }
-
-  override def shape: FlowShape[ByteString, ByteString] = FlowShape(in, out)
 }
