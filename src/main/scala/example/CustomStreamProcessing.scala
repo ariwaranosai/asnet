@@ -36,8 +36,12 @@ final class CustomOutGraphStage extends GraphStage[SourceShape[Int]] {
 
       setHandler(out, new OutHandler {
         override def onPull(): Unit = {
-          push(out, current)
-          current += 1
+          if(current > 100)
+            fail(out, BufferOverflowException("out of number"))
+          else {
+            push(out, current)
+            current += 1
+          }
         }
       })
     }
