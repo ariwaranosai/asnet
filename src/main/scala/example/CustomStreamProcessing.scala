@@ -66,7 +66,6 @@ final class CustomSinkProcessing extends GraphStage[SinkShape[Int]] {
     }
 }
 
-
 object OutSource {
   def main(args: Array[String]): Unit = {
     implicit val system = ActorSystem("SourceOut")

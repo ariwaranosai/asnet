@@ -8,6 +8,7 @@ libraryDependencies ++=  {
   val akkaVersion = "2.4.10"
   Seq(
     "com.typesafe.akka" %% "akka-actor" % akkaVersion,
-    "com.typesafe.akka" %% "akka-stream" % akkaVersion
+    "com.typesafe.akka" %% "akka-stream" % akkaVersion,
+    "org.scalatest" %% "scalatest" % "3.0.0" % "test"
   )
 }

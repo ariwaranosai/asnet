@@ -6,7 +6,7 @@ import akka.util.ByteString
   *
   */
 
-class SizedByteFrame extends ByteFragment[(Int, Option[String])]{
+object SizedByteFrame extends ByteFragment[(Int, Option[String])]{
   override def fromBytes: Extractor =
     new PartialFunction[Seq[Byte], ((Int, Option[String]), Seq[Byte])] {
       def getLength(d: Seq[Byte]) = (d.head.toInt, d.tail)
@@ -20,7 +20,7 @@ class SizedByteFrame extends ByteFragment[(Int, Option[String])]{
         val (size, data) = getLength(raw)
 
         if(size > 0) {
-          val str = ByteString(data.slice(0, size)).utf8String
+          val str = ByteString(data.slice(0, size).toArray).utf8String
           ((size, Some(str)), data.slice(size, data.length))
         } else
           ((0, None), raw)
@@ -31,7 +31,7 @@ class SizedByteFrame extends ByteFragment[(Int, Option[String])]{
     val head = 0x00.toByte
     value._2 match {
       case Some(raw) =>
-        head +: raw.length.toByte +: ByteString(raw.toArray)
+        head +: value._1.toByte +: ByteString(raw.toArray.map(_.toByte))
       case None =>
         head +: ByteString(0.toByte)
     }
