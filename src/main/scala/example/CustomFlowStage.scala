@@ -1,34 +1,44 @@
 package example
 
+import java.io.IOException
+
 import akka.{Done, NotUsed}
 import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl.Tcp.{IncomingConnection, ServerBinding}
-import akka.stream.scaladsl.{Flow, Sink, Source, Tcp}
-import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
+import akka.stream.scaladsl.{Flow, Keep, Sink, Source, Tcp}
+import akka.stream.stage._
 import akka.util.ByteString
 import datafragment.SizedByteFrame
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success}
 
 /**
   * Created by sai on 2016/10/31.
   */
-class CustomFlowStage extends GraphStage[FlowShape[ByteString, String]] {
+
+class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteString, String], Future[Int]] {
   val in = Inlet[ByteString]("Custom.in")
   val out = Outlet[String]("Custom.out")
+  val promise = Promise[Int]()
 
   override def shape: FlowShape[ByteString, String] = FlowShape(in, out)
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
-    new GraphStageLogic(shape) {
+  override def createLogicAndMaterializedValue(inheritedAttributes: Attributes): (GraphStageLogic, Future[Int]) = {
+    val logic = new GraphStageLogic(shape) {
       val bufferSize = 8192
       var buffer = ByteString.empty
+      var count = 0
+
+      def failWithException(throwable: Throwable) = {
+        promise.tryFailure(throwable)
+        failStage(throwable)
+      }
 
       def writeBuffer(data: ByteString): Unit = {
-        if(buffer.length > bufferSize)
-          failStage(BufferOverflowException("Buffer Overflow"))
+        if (buffer.length > bufferSize)
+          failWithException(BufferOverflowException("Buffer Overflow"))
         else
           buffer ++= data
       }
@@ -38,39 +48,90 @@ class CustomFlowStage extends GraphStage[FlowShape[ByteString, String]] {
         pull(in)
       }
 
+      override def postStop() = {
+        promise.tryFailure(new IOException("Connection closed"))
+        super.postStop()
+      }
+
+      def finishRequest(): Unit = {
+        var resList = List[String]()
+        while(buffer.nonEmpty) {
+          buffer match {
+             case SizedByteFrame((s, data), raw) => {
+              data match {
+                case Some(str) => resList = str :: resList
+                case None => resList = "None" :: resList
+              }
+              buffer = ByteString(raw: _*)
+            }
+            case _ => failWithException(BufferOverflowException("Package Unexcepted"))
+          }
+        }
+
+        emitMultiple(out, resList)
+        count += resList.size
+
+        setHandler(in, new InHandler {
+          @scala.throws[Exception](classOf[Exception])
+          override def onPush(): Unit = ()
+        })
+
+        setHandler(out, new OutHandler {
+          @scala.throws[Exception](classOf[Exception])
+          override def onPull(): Unit = ()
+        })
+
+        promise.success(count)
+      }
+
       setHandler(in, new InHandler {
-        def processBuffer(): Unit =
+        def processBuffer(): Unit = {
           buffer match {
             case SizedByteFrame((s, data), raw) => {
               data match {
-                case Some(str) => emit(out, str, () => pull(in))
-                case None => pull(in)
+                case Some(str) => emit(out, str, () => {count += 1; pull(in)})
+                case None => emit(out, "None", () => {count += 1; pull(in)})
               }
-              buffer = ByteString(raw:_*)
+              buffer = ByteString(raw: _*)
             }
-            case _ => pull(in)
+            case d if d.head == 0x00 => pull(in)
+            case _ => failWithException(BufferOverflowException("Package Unexcepted"))
           }
+        }
 
         override def onPush(): Unit = {
           val data = grab(in)
           writeBuffer(data)
           processBuffer()
         }
+
+        override def onUpstreamFinish(): Unit = {
+          finishRequest()
+        }
       })
 
       setHandler(out, eagerTerminateOutput)
     }
+
+    (logic, promise.future)
+  }
 }
 
 object CustomTest {
   def main(args: Array[String]): Unit = {
     implicit val system = ActorSystem("Test")
     implicit val materializer = ActorMaterializer()
+    import scala.concurrent.ExecutionContext.Implicits.global
 
-    val source = Source.repeat(0.toByte +: 12.toByte +: ByteString("hello world!")).map(x => {println(x); x})
-    val server: Flow[ByteString, String, NotUsed] = Flow.fromGraph(new CustomFlowStage)
-    val sink: Sink[String, Future[Done]] = Sink.foreach(println(_))
-    source.via(server).to(sink).run()
+    val l = List.fill(5)(0.toByte +: 0.toByte +: 0.toByte +: 5.toByte +: ByteString("hello"))
+
+    val source = Source.fromIterator(() => l.toIterator)
+    val server: Flow[ByteString, String, Future[Int]] = Flow.fromGraph(new CustomFlowStage)
+    val sink: Sink[String, Future[Done]] = Sink.foreach(println)
+    val t = source.viaMat(server)(Keep.right).toMat(sink)(Keep.left).run()
+    t.onSuccess {
+      case x => println(s"success with $x")
+    }
   }
 }
 
@@ -89,12 +150,16 @@ object Main {
     val connection: Source[IncomingConnection, Future[ServerBinding]] =
       Tcp().bind(address, port)
 
-    val server: Flow[ByteString, String, NotUsed] = Flow.fromGraph(new CustomFlowStage)
+    val server: Flow[ByteString, String, Future[Int]] = Flow.fromGraph(new CustomFlowStage)
 
     val handler = Sink.foreach[IncomingConnection] {
       conn =>
         println(s"New connection from ${conn.remoteAddress}")
-        conn handleWith server.map(s => {println(s); ByteString(s + "\n")})
+        val count = conn handleWith server.map(s => {println(s); ByteString(s + "\n")})
+        count.onComplete {
+          case Success(x) => println(s"$x lines")
+          case Failure(t) => println(s"${conn.remoteAddress} failed with ${t.getMessage}")
+        }
     }
 
     val binding = connection.to(handler).run()

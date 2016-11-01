@@ -23,7 +23,7 @@ object SizedByteFrame extends ByteFragment[(Int, Option[String])]{
           val str = ByteString(data.slice(0, size).toArray).utf8String
           ((size, Some(str)), data.slice(size, data.length))
         } else
-          ((0, None), raw)
+          ((0, None), raw.tail)
       }
     }
 
