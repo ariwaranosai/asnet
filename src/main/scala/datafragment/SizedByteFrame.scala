@@ -11,7 +11,7 @@ object SizedByteFrame extends ByteFragment[(Int, Option[String])]{
     new PartialFunction[Seq[Byte], ((Int, Option[String]), Seq[Byte])] {
       def getLength(d: Seq[Byte]) = (d.head.toInt, d.tail)
       def isDefinedAt(d: Seq[Byte]) =  {
-        val (size, data) = getLength(d)
+        val (size, data) = getLength(d.tail)
         (d.head == 0x00) && (size <= data.length)
       }
 

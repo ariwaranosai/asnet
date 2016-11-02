@@ -57,14 +57,13 @@ class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteStri
         var resList = List[String]()
         while(buffer.nonEmpty) {
           buffer match {
-             case SizedByteFrame((s, data), raw) => {
-              data match {
-                case Some(str) => resList = str :: resList
-                case None => resList = "None" :: resList
-              }
-              buffer = ByteString(raw: _*)
-            }
-            case _ => failWithException(BufferOverflowException("Package Unexcepted"))
+             case SizedByteFrame((s, data), raw) =>
+               data match {
+                 case Some(str) => resList = str :: resList
+                 case None => resList = "None" :: resList
+               }
+               buffer = ByteString(raw: _*)
+             case _ => failWithException(BufferOverflowException("Package Unexcepted"))
           }
         }
 
@@ -75,18 +74,18 @@ class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteStri
 
       setHandler(in, new InHandler {
         def processBuffer(): Unit = {
+          println(buffer)
           buffer match {
-            case SizedByteFrame((s, data), raw) => {
+            case SizedByteFrame((s, data), raw) =>
               data match {
                 case Some(str) => emit(out, str, () => {count += 1; pull(in)})
                 case None => emit(out, "None", () => {count += 1; pull(in)})
               }
               buffer = ByteString(raw: _*)
-            }
-            case d if d.head == 0x00 => pull(in)
-            case _ => {
+            case d if d.head == 0x00 =>
+              pull(in)
+            case _ =>
               failWithException(BufferOverflowException("Package Unexcepted"))
-            }
           }
         }
 
@@ -124,7 +123,7 @@ object CustomTest {
     val t = source.viaMat(server)(Keep.right).toMat(sink)(Keep.left).run()
     t.onComplete {
       case Success(x) => println(s"success with $x")
-      case Failure(t) => println(s"failed with ${t.getMessage}")
+      case Failure(throwable) => println(s"failed with ${throwable.getMessage}")
     }
   }
 }
@@ -149,7 +148,7 @@ object Main {
     val handler = Sink.foreach[IncomingConnection] {
       conn =>
         println(s"New connection from ${conn.remoteAddress}")
-        val count = conn handleWith server.map(s => {println(s); ByteString(s + "\n")})
+        val count = conn handleWith server.map(s => ByteString(s + "\n"))
         count.onComplete {
           case Success(x) => println(s"$x lines")
           case Failure(t) => println(s"${conn.remoteAddress} failed with ${t.getMessage}")
