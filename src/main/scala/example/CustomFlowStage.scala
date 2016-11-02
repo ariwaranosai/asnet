@@ -21,11 +21,11 @@ import scala.util.{Failure, Success}
 class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteString, String], Future[Int]] {
   val in = Inlet[ByteString]("Custom.in")
   val out = Outlet[String]("Custom.out")
-  val promise = Promise[Int]()
 
   override def shape: FlowShape[ByteString, String] = FlowShape(in, out)
 
   override def createLogicAndMaterializedValue(inheritedAttributes: Attributes): (GraphStageLogic, Future[Int]) = {
+    val promise = Promise[Int]()
     val logic = new GraphStageLogic(shape) {
       val bufferSize = 8192
       var buffer = ByteString.empty
@@ -70,17 +70,6 @@ class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteStri
 
         emitMultiple(out, resList)
         count += resList.size
-
-        setHandler(in, new InHandler {
-          @scala.throws[Exception](classOf[Exception])
-          override def onPush(): Unit = ()
-        })
-
-        setHandler(out, new OutHandler {
-          @scala.throws[Exception](classOf[Exception])
-          override def onPull(): Unit = ()
-        })
-
         promise.success(count)
       }
 
@@ -95,7 +84,9 @@ class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteStri
               buffer = ByteString(raw: _*)
             }
             case d if d.head == 0x00 => pull(in)
-            case _ => failWithException(BufferOverflowException("Package Unexcepted"))
+            case _ => {
+              failWithException(BufferOverflowException("Package Unexcepted"))
+            }
           }
         }
 
@@ -107,6 +98,8 @@ class CustomFlowStage extends GraphStageWithMaterializedValue[FlowShape[ByteStri
 
         override def onUpstreamFinish(): Unit = {
           finishRequest()
+          super.onUpstreamFinish()
+          completeStage()
         }
       })
 
@@ -123,14 +116,15 @@ object CustomTest {
     implicit val materializer = ActorMaterializer()
     import scala.concurrent.ExecutionContext.Implicits.global
 
-    val l = List.fill(5)(0.toByte +: 0.toByte +: 0.toByte +: 5.toByte +: ByteString("hello"))
+    val l = List.fill(5)(0.toByte +: 0.toByte +: 5.toByte +: ByteString("hello"))
 
     val source = Source.fromIterator(() => l.toIterator)
     val server: Flow[ByteString, String, Future[Int]] = Flow.fromGraph(new CustomFlowStage)
     val sink: Sink[String, Future[Done]] = Sink.foreach(println)
     val t = source.viaMat(server)(Keep.right).toMat(sink)(Keep.left).run()
-    t.onSuccess {
-      case x => println(s"success with $x")
+    t.onComplete {
+      case Success(x) => println(s"success with $x")
+      case Failure(t) => println(s"failed with ${t.getMessage}")
     }
   }
 }
